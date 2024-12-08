@@ -130,44 +130,43 @@ def decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm, lexico):
         return decodificar_fonemas(lexico.get(mejor_etiqueta, []), lexico)
     return None
 
-# Lista acumuladora de palabras reconocidas
+# Lista acumuladora global de palabras reconocidas
 frase_acumulada = []
 
-# Reconocimiento continuo actualizado
+# Reconocimiento continuo con acumulación persistente
 def reconocimiento_continuo(duracion, modelos_hmm, modelo_trigramas, lexico):
-    global frase_acumulada  # Usamos una variable global para acumular palabras
+    global frase_acumulada  # Persistencia entre llamadas
     frecuencia_muestreo, señal = grabar_audio(duracion)
     if np.max(np.abs(señal)) > 0:
         señal = señal / np.max(np.abs(señal))  # Normaliza el audio
     else:
         print("Señal vacía o inválida.")
         return
-    
+
     palabra = decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm, lexico)
     if palabra:
-        frase_acumulada.append(palabra)
+        frase_acumulada.append(palabra)  # Agrega la palabra reconocida
         print(f"Palabra reconocida: {palabra}")
     else:
         print("No se reconoció ninguna palabra.")
         return
 
-    # Solo calculamos trigramas si hay al menos 3 palabras acumuladas
+    # Generar trigramas y calcular probabilidades
     if len(frase_acumulada) >= 3:
-        frase = " ".join(frase_acumulada[-3:])  # Usamos las últimas 3 palabras
+        frase = " ".join(frase_acumulada[-3:])  # Últimas 3 palabras para trigramas
         probabilidad = calcular_probabilidad_ngramas(frase, modelo_trigramas, 3)
         print(f"Transcripción acumulada: '{frase}'")
         print(f"Probabilidad basada en trigramas: {probabilidad}")
     else:
         print(f"Frase acumulada hasta ahora: {' '.join(frase_acumulada)}")
 
-
-# Función para procesar un archivo .wav y realizar el reconocimiento
+# Reconocimiento desde un archivo .wav
 def reconocimiento_por_archivo(ruta_archivo, modelos_hmm, modelo_trigramas, lexico):
+    global frase_acumulada
     if not os.path.exists(ruta_archivo):
         print(f"Archivo no encontrado: {ruta_archivo}")
         return
 
-    # Leer el archivo .wav
     frecuencia_muestreo, señal = wavfile.read(ruta_archivo)
     if np.max(np.abs(señal)) > 0:
         señal = señal / np.max(np.abs(señal))  # Normaliza el audio
@@ -175,17 +174,21 @@ def reconocimiento_por_archivo(ruta_archivo, modelos_hmm, modelo_trigramas, lexi
         print("Archivo de audio vacío o inválido.")
         return
 
-    # Decodificar usando Viterbi y el léxico
-    palabra = decodificar_viterbi_archivo(señal, frecuencia_muestreo, modelos_hmm, lexico)
-    frase = palabra if palabra else ""
-    
-    # Evaluar la probabilidad de la frase en el modelo de trigramas
-    if frase:
+    palabra = decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm, lexico)
+    if palabra:
+        frase_acumulada.append(palabra)  # Agrega la palabra reconocida
+        print(f"Palabra reconocida desde archivo: {palabra}")
+    else:
+        print("No se reconoció ninguna palabra en el archivo.")
+        return
+
+    if len(frase_acumulada) >= 3:
+        frase = " ".join(frase_acumulada[-3:])  # Últimas 3 palabras
         probabilidad = calcular_probabilidad_ngramas(frase, modelo_trigramas, 3)
-        print(f"Transcripción desde archivo: '{frase}'")
+        print(f"Transcripción acumulada desde archivo: '{frase}'")
         print(f"Probabilidad basada en trigramas: {probabilidad}")
     else:
-        print("Frase desconocida o vacía en el archivo.")
+        print(f"Frase acumulada hasta ahora: {' '.join(frase_acumulada)}")
 
 # Extraer características MFCC y Delta con ajustes
 def extraer_caracteristicas_archivo(señal, frecuencia_muestreo):
@@ -219,7 +222,7 @@ def decodificar_viterbi_archivo(señal, frecuencia_muestreo, modelos_hmm, lexico
 if __name__ == '__main__':
     # Corpus para trigramas
     corpus = [
-        "two two two",
+        "six six six",
         "yes go left",
         "no stop right",
         "go down left",
@@ -240,5 +243,11 @@ if __name__ == '__main__':
     # Reconocimiento desde micrófono
     reconocimiento_continuo(duracion=5, modelos_hmm=modelos_hmm, modelo_trigramas=modelo_trigramas, lexico=lexico)
 
-    archivo_prueba = 'sixale.wav'  # Cambia esto por la ruta de tu archivo .wav
-    #reconocimiento_por_archivo(archivo_prueba, modelos_hmm, modelo_trigramas, lexico)
+    # archivo_prueba = 'sixale.wav'  # Cambia esto por la ruta de tu archivo .wav
+    # reconocimiento_por_archivo(archivo_prueba, modelos_hmm, modelo_trigramas, lexico)
+    # archivo_prueba = 'sevenale.wav'  # Cambia esto por la ruta de tu archivo .wav
+    # reconocimiento_por_archivo(archivo_prueba, modelos_hmm, modelo_trigramas, lexico)
+    # archivo_prueba = 'twoalfredo.wav'  # Cambia esto por la ruta de tu archivo .wav
+    # reconocimiento_por_archivo(archivo_prueba, modelos_hmm, modelo_trigramas, lexico)
+    # archivo_prueba = 'learnalfredo.wav'  # Cambia esto por la ruta de tu archivo .wav
+    # reconocimiento_por_archivo(archivo_prueba, modelos_hmm, modelo_trigramas, lexico)
