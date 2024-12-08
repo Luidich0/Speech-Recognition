@@ -56,7 +56,14 @@ def calcular_probabilidad_ngramas(frase, modelo_ngramas, n=3):
         probabilidad *= frecuencia
     return probabilidad
 
-# Extrae características MFCC y Delta
+# Decodificar fonemas usando el léxico
+def decodificar_fonemas(fonemas, lexico):
+    for palabra, transcripcion in lexico.items():
+        if fonemas == transcripcion:
+            return palabra
+    return None
+
+# Extraer características MFCC y Delta
 def extraer_caracteristicas(señal, frecuencia_muestreo):
     mfcc_features = mfcc(señal, frecuencia_muestreo)
     delta_features = delta(mfcc_features, 2)
@@ -94,40 +101,6 @@ def construir_modelos(carpeta_entrada, archivo_modelos):
         pickle.dump(modelos_voz, f)
     return modelos_voz
 
-# Decodificar con Viterbi
-def decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm):
-    palabras = []
-    caracteristicas = extraer_caracteristicas(señal, frecuencia_muestreo)
-    plt.imshow(caracteristicas.T, aspect='auto', origin='lower')
-    plt.title("MFCC Features")
-    plt.show()  # Visualiza las características MFCC
-    for modelo, etiqueta in modelos_hmm:
-        try:
-            puntuacion = modelo.calcular_puntuacion(caracteristicas)
-            palabras.append((puntuacion, etiqueta))
-            print(f"Puntuación para '{etiqueta}': {puntuacion}")
-        except Exception as e:
-            print(f"Error con modelo {etiqueta}: {e}")
-    palabras.sort(reverse=True, key=lambda x: x[0])
-    return palabras[0][1] if palabras else None
-
-# Reconocimiento continuo
-def reconocimiento_continuo(duracion, modelos_hmm, modelo_trigramas):
-    frecuencia_muestreo, señal = grabar_audio(duracion)
-    if np.max(np.abs(señal)) > 0:
-        señal = señal / np.max(np.abs(señal))  # Normaliza el audio
-    else:
-        print("Señal vacía o inválida.")
-        return
-    palabra = decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm)
-    frase = palabra if palabra else ""
-    if frase:
-        probabilidad = calcular_probabilidad_ngramas(frase, modelo_trigramas, 3)
-        print(f"Transcripción: '{frase}'")
-        print(f"Probabilidad basada en trigramas: {probabilidad}")
-    else:
-        print("Frase desconocida o vacía.")
-
 # Función para grabar audio
 def grabar_audio(duracion, frecuencia_muestreo=16000):
     print("Grabando... Hable ahora.")
@@ -137,10 +110,116 @@ def grabar_audio(duracion, frecuencia_muestreo=16000):
     wavfile.write("audio_prueba.wav", frecuencia_muestreo, señal)  # Guarda la grabación para inspección
     return frecuencia_muestreo, señal.flatten()
 
+# Decodificar con Viterbi
+def decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm, lexico):
+    palabras = []
+    caracteristicas = extraer_caracteristicas(señal, frecuencia_muestreo)
+    plt.imshow(caracteristicas.T, aspect='auto', origin='lower')
+    plt.title("MFCC Features")
+    #plt.show()  # Visualiza las características MFCC
+    for modelo, etiqueta in modelos_hmm:
+        try:
+            puntuacion = modelo.calcular_puntuacion(caracteristicas)
+            palabras.append((puntuacion, etiqueta))
+            print(f"Puntuación para '{etiqueta}': {puntuacion}")
+        except Exception as e:
+            print(f"Error con modelo {etiqueta}: {e}")
+    palabras.sort(reverse=True, key=lambda x: x[0])
+    if palabras:
+        mejor_etiqueta = palabras[0][1]
+        return decodificar_fonemas(lexico.get(mejor_etiqueta, []), lexico)
+    return None
+
+# Lista acumuladora de palabras reconocidas
+frase_acumulada = []
+
+# Reconocimiento continuo actualizado
+def reconocimiento_continuo(duracion, modelos_hmm, modelo_trigramas, lexico):
+    global frase_acumulada  # Usamos una variable global para acumular palabras
+    frecuencia_muestreo, señal = grabar_audio(duracion)
+    if np.max(np.abs(señal)) > 0:
+        señal = señal / np.max(np.abs(señal))  # Normaliza el audio
+    else:
+        print("Señal vacía o inválida.")
+        return
+    
+    palabra = decodificar_viterbi(señal, frecuencia_muestreo, modelos_hmm, lexico)
+    if palabra:
+        frase_acumulada.append(palabra)
+        print(f"Palabra reconocida: {palabra}")
+    else:
+        print("No se reconoció ninguna palabra.")
+        return
+
+    # Solo calculamos trigramas si hay al menos 3 palabras acumuladas
+    if len(frase_acumulada) >= 3:
+        frase = " ".join(frase_acumulada[-3:])  # Usamos las últimas 3 palabras
+        probabilidad = calcular_probabilidad_ngramas(frase, modelo_trigramas, 3)
+        print(f"Transcripción acumulada: '{frase}'")
+        print(f"Probabilidad basada en trigramas: {probabilidad}")
+    else:
+        print(f"Frase acumulada hasta ahora: {' '.join(frase_acumulada)}")
+
+
+# Función para procesar un archivo .wav y realizar el reconocimiento
+def reconocimiento_por_archivo(ruta_archivo, modelos_hmm, modelo_trigramas, lexico):
+    if not os.path.exists(ruta_archivo):
+        print(f"Archivo no encontrado: {ruta_archivo}")
+        return
+
+    # Leer el archivo .wav
+    frecuencia_muestreo, señal = wavfile.read(ruta_archivo)
+    if np.max(np.abs(señal)) > 0:
+        señal = señal / np.max(np.abs(señal))  # Normaliza el audio
+    else:
+        print("Archivo de audio vacío o inválido.")
+        return
+
+    # Decodificar usando Viterbi y el léxico
+    palabra = decodificar_viterbi_archivo(señal, frecuencia_muestreo, modelos_hmm, lexico)
+    frase = palabra if palabra else ""
+    
+    # Evaluar la probabilidad de la frase en el modelo de trigramas
+    if frase:
+        probabilidad = calcular_probabilidad_ngramas(frase, modelo_trigramas, 3)
+        print(f"Transcripción desde archivo: '{frase}'")
+        print(f"Probabilidad basada en trigramas: {probabilidad}")
+    else:
+        print("Frase desconocida o vacía en el archivo.")
+
+# Extraer características MFCC y Delta con ajustes
+def extraer_caracteristicas_archivo(señal, frecuencia_muestreo):
+    mfcc_features = mfcc(señal, frecuencia_muestreo, winlen=0.02, nfft=2048)
+    delta_features = delta(mfcc_features, 2)
+    caracteristicas = np.hstack((mfcc_features, delta_features))
+    return caracteristicas
+
+# Decodificar con Viterbi (con normalización de puntuaciones)
+def decodificar_viterbi_archivo(señal, frecuencia_muestreo, modelos_hmm, lexico):
+    palabras = []
+    caracteristicas = extraer_caracteristicas_archivo(señal, frecuencia_muestreo)
+    for modelo, etiqueta in modelos_hmm:
+        try:
+            puntuacion = modelo.calcular_puntuacion(caracteristicas)
+            palabras.append((puntuacion, etiqueta))
+            print(f"Puntuación para '{etiqueta}': {puntuacion}")
+        except Exception as e:
+            print(f"Error con modelo {etiqueta}: {e}")
+    
+    # Normalizar puntuaciones
+    puntuaciones_normalizadas = [(puntuacion / len(caracteristicas), etiqueta) for puntuacion, etiqueta in palabras]
+    puntuaciones_normalizadas.sort(reverse=True, key=lambda x: x[0])
+    if puntuaciones_normalizadas:
+        mejor_etiqueta = puntuaciones_normalizadas[0][1]
+        return decodificar_fonemas(lexico.get(mejor_etiqueta, []), lexico)
+    return None
+
+
 # Código principal
 if __name__ == '__main__':
     # Corpus para trigramas
     corpus = [
+        "two two two",
         "yes go left",
         "no stop right",
         "go down left",
@@ -159,4 +238,7 @@ if __name__ == '__main__':
     modelos_hmm = construir_modelos(carpeta_entrada, archivo_modelos)
 
     # Reconocimiento desde micrófono
-    reconocimiento_continuo(duracion=5, modelos_hmm=modelos_hmm, modelo_trigramas=modelo_trigramas)
+    reconocimiento_continuo(duracion=5, modelos_hmm=modelos_hmm, modelo_trigramas=modelo_trigramas, lexico=lexico)
+
+    archivo_prueba = 'sixale.wav'  # Cambia esto por la ruta de tu archivo .wav
+    #reconocimiento_por_archivo(archivo_prueba, modelos_hmm, modelo_trigramas, lexico)
