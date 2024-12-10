@@ -233,7 +233,7 @@ if __name__ == '__main__':
     modelo_trigramas = construir_ngramas(corpus, 3)
 
     carpeta_entrada = 'filtered_speech_commands'
-    archivo_modelos = 'modelos_hmm.pkl'
+    archivo_modelos = 'modelos_hmm_continuo.pkl'
     
     modelos_hmm = construir_modelos(carpeta_entrada, archivo_modelos)
     #conjunto_prueba = preparar_conjunto_prueba(carpeta_entrada)

@@ -1,56 +1,33 @@
 import os
 import warnings
 import pickle
-import sounddevice as sd
 import numpy as np
+import itertools
 from scipy.io import wavfile
-from scipy.signal import find_peaks
 from python_speech_features import mfcc, delta
+from nltk.lm import MLE
+from nltk.lm.preprocessing import padded_everygram_pipeline
+from sklearn.metrics import accuracy_score
 from hmmlearn import hmm
+import sounddevice as sd
 
-# Helper function: Segment audio based on silence
-def segment_audio(señal, frecuencia_muestreo, threshold=0.02, min_silence_duration=0.2):
-    """
-    Segments audio into chunks based on energy levels.
-    
-    Args:
-        señal (np.array): Audio signal (1D).
-        frecuencia_muestreo (int): Sampling frequency.
-        threshold (float): Energy threshold for silence detection.
-        min_silence_duration (float): Minimum silence duration in seconds.
-    
-    Returns:
-        list: List of segmented audio signals (numpy arrays).
-    """
-    energy = np.abs(señal)
-    silence_frames = energy < threshold
-    silence_samples = int(min_silence_duration * frecuencia_muestreo)
-    silence_indices = np.where(silence_frames)[0]
-    split_indices = find_peaks(np.diff(silence_indices), height=silence_samples)[0]
-    
-    segments = []
-    start_idx = 0
-    for idx in split_indices:
-        end_idx = silence_indices[idx]
-        segments.append(señal[start_idx:end_idx])
-        start_idx = end_idx
-    segments.append(señal[start_idx:])  # Append the last segment
-    
-    return [seg for seg in segments if len(seg) > 0]
 
-# Class for HMM model
+# Modelo HMM
 class ModeloHMM:
     def __init__(self, num_componentes=8, num_iteraciones=2000):
-        self.modelo = hmm.GaussianHMM(n_components=num_componentes, covariance_type='diag', n_iter=num_iteraciones)
+        self.num_componentes = num_componentes
+        self.num_iteraciones = num_iteraciones
+        self.tipo_covarianza = 'diag'
+        self.modelo = hmm.GaussianHMM(n_components=self.num_componentes, covariance_type=self.tipo_covarianza, n_iter=self.num_iteraciones)
 
     def entrenar(self, datos_entrenamiento):
-        np.seterr(all='ignore')  # Ignore numerical warnings
+        np.seterr(all='ignore')  # Ignorar advertencias numéricas
         self.modelo.fit(datos_entrenamiento)
 
     def calcular_puntuacion(self, datos_entrada):
         return self.modelo.score(datos_entrada)
 
-# Function to build or load HMM models
+# Construir modelos acústicos (HMM)
 def construir_modelos(carpeta_entrada, archivo_modelos):
     if os.path.exists(archivo_modelos):
         print("Cargando modelos desde archivo...")
@@ -66,17 +43,21 @@ def construir_modelos(carpeta_entrada, archivo_modelos):
 
             etiqueta = nombre_directorio
             X = np.array([])
+
             archivos_entrenamiento = [x for x in os.listdir(subcarpeta) if x.endswith('.wav')][:-2]
             for nombre_archivo in archivos_entrenamiento:
                 ruta_archivo = os.path.join(subcarpeta, nombre_archivo)
                 frecuencia_muestreo, señal = wavfile.read(ruta_archivo)
                 señal = señal / np.max(np.abs(señal))
+
                 with warnings.catch_warnings():
                     warnings.simplefilter('ignore')
                     caracteristicas_mfcc = mfcc(señal, frecuencia_muestreo)
                     caracteristicas_delta = delta(caracteristicas_mfcc, 2)
+
                 caracteristicas = np.hstack((caracteristicas_mfcc, caracteristicas_delta))
-                X = np.vstack((X, caracteristicas)) if X.size else caracteristicas
+                X = caracteristicas if len(X) == 0 else np.append(X, caracteristicas, axis=0)
+
             modelo = ModeloHMM()
             modelo.entrenar(X)
             modelos_voz.append((modelo, etiqueta))
@@ -84,97 +65,157 @@ def construir_modelos(carpeta_entrada, archivo_modelos):
         with open(archivo_modelos, 'wb') as f:
             pickle.dump(modelos_voz, f)
         print("Modelos entrenados y guardados en archivo.")
+
     return modelos_voz
 
-def clasificar_secuencia_audio(modelos_voz, señal, frecuencia_muestreo):
-    """
-    Classifies a sequence of words from an audio signal.
+# Construir modelo de lenguaje (n-gramas) o cargarlo
+def construir_o_cargar_modelo_lenguaje(archivo_modelo_lenguaje, corpus_texto=None, n=2):
+    if os.path.exists(archivo_modelo_lenguaje):
+        print("Cargando modelo de lenguaje desde archivo...")
+        with open(archivo_modelo_lenguaje, 'rb') as f:
+            modelo_lenguaje = pickle.load(f)
+    else:
+        print("Creando modelo de lenguaje...")
+        train_data, vocab = padded_everygram_pipeline(n, corpus_texto)
+        modelo_lenguaje = MLE(n)
+        modelo_lenguaje.fit(train_data, vocab)
 
-    Args:
-        modelos_voz (list): List of tuples (HMM model, label).
-        señal (np.array): Audio signal (1D).
-        frecuencia_muestreo (int): Sampling frequency.
+        with open(archivo_modelo_lenguaje, 'wb') as f:
+            pickle.dump(modelo_lenguaje, f)
+        print("Modelo de lenguaje creado y guardado en archivo.")
+    
+    return modelo_lenguaje
 
-    Returns:
-        list: Predicted sequence of words.
-    """
-    segmentos = segment_audio(señal, frecuencia_muestreo)
-    print(f"Number of segments detected: {len(segmentos)}")
-
-    secuencia_predicha = []
-    for i, segmento in enumerate(segmentos):
-        print(f"Processing segment {i+1}...")
-        if len(segmento) == 0:
-            print(f"Segment {i+1} is empty, skipping.")
-            continue
-
-        # Normalize the segment
-        segmento = segmento / np.max(np.abs(segmento))
-
-        # Extract features
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            caracteristicas_mfcc = mfcc(segmento, frecuencia_muestreo)
-            caracteristicas_delta = delta(caracteristicas_mfcc, 2)
-
-        caracteristicas = np.hstack((caracteristicas_mfcc, caracteristicas_delta))
-        print(f"Features shape for segment {i+1}: {caracteristicas.shape}")
-
-        if caracteristicas.shape[0] == 0:
-            print(f"Warning: No features extracted for segment {i+1}, skipping.")
-            continue
-
-        # Classify the segment
-        mejor_puntuacion = -float('inf')
-        etiqueta_predicha = None
+# Decodificador para clasificar con modelo acústico y de lenguaje
+def decodificar(modelos_voz, modelo_lenguaje, caracteristicas, palabras_lexico):
+    puntuaciones = []
+    for palabra in palabras_lexico:
         for modelo, etiqueta in modelos_voz:
-            try:
+            if etiqueta == palabra:
                 puntuacion = modelo.calcular_puntuacion(caracteristicas)
-                if puntuacion > mejor_puntuacion:
-                    mejor_puntuacion = puntuacion
-                    etiqueta_predicha = etiqueta
-            except Exception as e:
-                print(f"Error while scoring segment {i+1}: {e}")
-                continue
+                puntuaciones.append((palabra, puntuacion))
 
-        if etiqueta_predicha:
-            print(f"Segment {i+1} classified as: {etiqueta_predicha}")
-            secuencia_predicha.append(etiqueta_predicha)
-        else:
-            print(f"Segment {i+1} could not be classified.")
+    mejores_palabras = sorted(puntuaciones, key=lambda x: x[1], reverse=True)[:len(palabras_lexico)]
+    secuencia_palabras = [palabra for palabra, _ in mejores_palabras]
 
-    return secuencia_predicha
+    mejor_secuencia = max(itertools.permutations(secuencia_palabras, len(secuencia_palabras)), 
+                          key=lambda seq: modelo_lenguaje.score(' '.join(seq)))
 
+    return ' '.join(mejor_secuencia)
 
-# Function to classify audio from microphone
-def clasificar_audio_microfono_secuencia(modelos_voz, duracion=3, frecuencia_muestreo=16000):
-    print("Grabando desde el micrófono...")
-    señal = sd.rec(int(duracion * frecuencia_muestreo), samplerate=frecuencia_muestreo, channels=1, dtype='float32')
-    sd.wait()
-    señal = señal.flatten()
-    secuencia_predicha = clasificar_secuencia_audio(modelos_voz, señal, frecuencia_muestreo)
-    print(f"Predicción para el audio grabado: {' '.join(secuencia_predicha)}")
+# Evaluar precisión de los modelos HMM
+def ejecutar_pruebas(carpeta_entrada, modelos_voz, modelo_lenguaje):
+    etiquetas_originales = []
+    etiquetas_predichas = []
 
-# Function to classify audio from file
-def clasificar_audio_archivo_secuencia(modelos_voz, ruta_archivo):
+    for nombre_directorio in os.listdir(carpeta_entrada):
+        subcarpeta = os.path.join(carpeta_entrada, nombre_directorio)
+        if not os.path.isdir(subcarpeta):
+            continue
+
+        etiqueta_original = nombre_directorio
+        archivos_prueba = [x for x in os.listdir(subcarpeta) if x.endswith('.wav')][-2:]
+        for archivo_prueba in archivos_prueba:
+            ruta_prueba = os.path.join(subcarpeta, archivo_prueba)
+            frecuencia_muestreo, señal = wavfile.read(ruta_prueba)
+            señal = señal / np.max(np.abs(señal))
+
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                caracteristicas_mfcc = mfcc(señal, frecuencia_muestreo)
+                caracteristicas_delta = delta(caracteristicas_mfcc, 2)
+
+            caracteristicas = np.hstack((caracteristicas_mfcc, caracteristicas_delta))
+            palabras_lexico = [etiqueta for _, etiqueta in modelos_voz]
+            etiqueta_predicha = decodificar(modelos_voz, modelo_lenguaje, caracteristicas, palabras_lexico)
+
+            etiquetas_originales.append(etiqueta_original)
+            etiquetas_predichas.append(etiqueta_predicha)
+
+            print(f"Original: {etiqueta_original}, Predicha: {etiqueta_predicha}")
+
+    precision = accuracy_score(etiquetas_originales, etiquetas_predichas)
+    print(f"\nPrecisión total: {precision * 100:.2f}%")
+
+# Clasificar audio desde un archivo
+def clasificar_audio_archivo(modelos_voz, modelo_lenguaje, ruta_archivo):
     if not os.path.exists(ruta_archivo):
         print(f"El archivo {ruta_archivo} no existe.")
         return
+
     frecuencia_muestreo, señal = wavfile.read(ruta_archivo)
     señal = señal / np.max(np.abs(señal))
-    secuencia_predicha = clasificar_secuencia_audio(modelos_voz, señal, frecuencia_muestreo)
-    print(f"Predicción para el archivo de audio: {' '.join(secuencia_predicha)}")
 
-# Main code
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        caracteristicas_mfcc = mfcc(señal, frecuencia_muestreo)
+        caracteristicas_delta = delta(caracteristicas_mfcc, 2)
+
+    caracteristicas = np.hstack((caracteristicas_mfcc, caracteristicas_delta))
+    palabras_lexico = [etiqueta for _, etiqueta in modelos_voz]
+    etiqueta_predicha = decodificar(modelos_voz, modelo_lenguaje, caracteristicas, palabras_lexico)
+
+    print(f"Predicción para el archivo de audio: {etiqueta_predicha}")
+
+def clasificar_audio_microfono(modelos_voz, duracion=3, frecuencia_muestreo=16000):
+    """
+    Graba audio desde el micrófono y lo clasifica.
+    
+    Args:
+        modelos_voz (list): Lista de tuplas (modelo, etiqueta).
+        duracion (int): Duración de la grabación en segundos.
+        frecuencia_muestreo (int): Frecuencia de muestreo en Hz.
+    """
+    print("Grabando desde el micrófono...")
+    # Grabar audio
+    señal = sd.rec(int(duracion * frecuencia_muestreo), samplerate=frecuencia_muestreo, channels=1, dtype='float32')
+    sd.wait()
+    señal = señal.flatten()  # Aplanar señal en 1D
+
+    señal = señal / np.max(np.abs(señal))  # Normalizar la señal
+
+    # Extraer características MFCC y sus deltas
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        caracteristicas_mfcc = mfcc(señal, frecuencia_muestreo)
+        caracteristicas_delta = delta(caracteristicas_mfcc, 2)
+
+    caracteristicas = np.hstack((caracteristicas_mfcc, caracteristicas_delta))
+
+    # Clasificar la señal grabada
+    mejor_puntuacion = -float('inf')
+    etiqueta_predicha = None
+
+    for modelo, etiqueta in modelos_voz:
+        puntuacion = modelo.calcular_puntuacion(caracteristicas)
+        if puntuacion > mejor_puntuacion:
+            mejor_puntuacion = puntuacion
+            etiqueta_predicha = etiqueta
+
+    print(f"Predicción para el audio grabado: {etiqueta_predicha}")
+
 if __name__ == '__main__':
-    carpeta_entrada = 'filtered_speech_commands'  # Replace with your dataset path
+    carpeta_entrada = 'filtered_speech_commands'
     archivo_modelos = 'modelos_hmm.pkl'
+    archivo_modelo_lenguaje = 'modelo_lenguaje.pkl'
 
-    # Build or load models
+    # Crear o cargar modelos acústicos
     modelos_voz = construir_modelos(carpeta_entrada, archivo_modelos)
 
-    # Test with microphone
-    clasificar_audio_microfono_secuencia(modelos_voz)
+    # Crear o cargar modelo de lenguaje
+    corpus_ejemplo = [
+        ['six', 'two'],
+        ['aprende', 'a', 'programar'],
+        ['python', 'es', 'increíble'],
+        ['este', 'es', 'un', 'ejemplo']
+    ]
+    modelo_lenguaje = construir_o_cargar_modelo_lenguaje(archivo_modelo_lenguaje, corpus_texto=corpus_ejemplo, n=3)
 
-    # Test with audio file
-    clasificar_audio_archivo_secuencia(modelos_voz, 'sevenale.wav')
+    # Evaluar precisión
+    # ejecutar_pruebas(carpeta_entrada, modelos_voz, modelo_lenguaje)
+
+    # Clasificar un archivo de audio
+    # ruta_audio_prueba = 'sixale.wav'  # Cambia por la ruta del archivo
+    # clasificar_audio_archivo(modelos_voz, modelo_lenguaje, ruta_audio_prueba)
+
+    clasificar_audio_microfono(modelos_voz)

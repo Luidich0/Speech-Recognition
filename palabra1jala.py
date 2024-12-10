@@ -244,6 +244,51 @@ def clasificar_audio_archivo(modelos_voz, ruta_archivo):
 
     print(f"Predicción para el archivo de audio: {etiqueta_predicha}")
 
+def clasificar_audio_microfono_multiple(modelos_voz, veces=3, duracion=3, frecuencia_muestreo=16000):
+    """
+    Graba audio desde el micrófono varias veces y clasifica cada grabación.
+    
+    Args:
+        modelos_voz (list): Lista de tuplas (modelo, etiqueta).
+        veces (int): Número de veces que se grabará y clasificará.
+        duracion (int): Duración de cada grabación en segundos.
+        frecuencia_muestreo (int): Frecuencia de muestreo en Hz.
+    """
+    predicciones = []  # Lista para almacenar las predicciones
+    
+    for i in range(veces):
+        print(f"\nGrabación {i + 1} de {veces}:")
+        # Grabar audio
+        señal = sd.rec(int(duracion * frecuencia_muestreo), samplerate=frecuencia_muestreo, channels=1, dtype='float32')
+        sd.wait()
+        señal = señal.flatten()  # Aplanar señal en 1D
+
+        señal = señal / np.max(np.abs(señal))  # Normalizar la señal
+
+        # Extraer características MFCC y sus deltas
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            caracteristicas_mfcc = mfcc(señal, frecuencia_muestreo)
+            caracteristicas_delta = delta(caracteristicas_mfcc, 2)
+
+        caracteristicas = np.hstack((caracteristicas_mfcc, caracteristicas_delta))
+
+        # Clasificar la señal grabada
+        mejor_puntuacion = -float('inf')
+        etiqueta_predicha = None
+
+        for modelo, etiqueta in modelos_voz:
+            puntuacion = modelo.calcular_puntuacion(caracteristicas)
+            if puntuacion > mejor_puntuacion:
+                mejor_puntuacion = puntuacion
+                etiqueta_predicha = etiqueta
+
+        # print(f"Predicción para la grabación {i + 1}: {etiqueta_predicha}")
+        predicciones.append(etiqueta_predicha)
+    
+    print("\nResultados Finales:")
+    for idx, palabra in enumerate(predicciones, start=1):
+        print(f"Grabación {idx}: {palabra}")
 
 # Código principal
 if __name__ == '__main__':
@@ -256,15 +301,15 @@ if __name__ == '__main__':
     ejecutar_pruebas(carpeta_entrada, modelos_voz)
 
     # Clasificar un audio desde el micrófono
-    clasificar_audio_microfono(modelos_voz)
+    clasificar_audio_microfono_multiple(modelos_voz, veces=3)
 
     # Clasificar un archivo de audio .wav
-    ruta_audio_prueba = 'sixale.wav'  # Cambia esto por la ruta del archivo .wav
-    clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
-    ruta_audio_prueba = 'sevenale.wav'  # Cambia esto por la ruta del archivo .wav
-    clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
-    ruta_audio_prueba = 'twoalfredo.wav'  # Cambia esto por la ruta del archivo .wav
-    clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
-    ruta_audio_prueba = 'learnalfredo.wav'  # Cambia esto por la ruta del archivo .wav
-    clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
+    # ruta_audio_prueba = 'sixale.wav'  # Cambia esto por la ruta del archivo .wav
+    # clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
+    # ruta_audio_prueba = 'sevenale.wav'  # Cambia esto por la ruta del archivo .wav
+    # clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
+    # ruta_audio_prueba = 'twoalfredo.wav'  # Cambia esto por la ruta del archivo .wav
+    # clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
+    # ruta_audio_prueba = 'learnalfredo.wav'  # Cambia esto por la ruta del archivo .wav
+    # clasificar_audio_archivo(modelos_voz, ruta_audio_prueba)
 
